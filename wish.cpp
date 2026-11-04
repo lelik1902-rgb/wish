@@ -35,12 +35,43 @@ std::vector<std::string> tokenize(const std::string& text) {
     return tokens;
 }
 
+// Шлях пошуку програм; команда path повністю його перезаписує.
+std::vector<std::string> search_path = {"/bin"};
+
+// Перший виконуваний файл у каталогах шляху; порожній рядок, якщо не знайдено.
+std::string find_program(const std::string& name) {
+    for (const std::string& directory : search_path) {
+        const std::string candidate = directory + "/" + name;
+        if (access(candidate.c_str(), X_OK) == 0) return candidate;
+    }
+    return "";
+}
+
+// Виконує вбудовану команду; повертає false, якщо це не вбудована команда.
+bool run_builtin(const std::vector<std::string>& args) {
+    const std::string& name = args[0];
+    if (name == "exit") {
+        if (args.size() != 1) {
+            print_error();
+        } else {
+            std::exit(0);
+        }
+    } else if (name == "cd") {
+        if (args.size() != 2 || chdir(args[1].c_str()) != 0) print_error();
+    } else if (name == "path") {
+        search_path.assign(args.begin() + 1, args.end());
+    } else {
+        return false;
+    }
+    return true;
+}
+
 void execute_line(const std::string& line) {
     const std::vector<std::string> args = tokenize(line);
-    if (args.empty()) return;
+    if (args.empty() || run_builtin(args)) return;
 
-    const std::string program = "/bin/" + args[0];
-    if (access(program.c_str(), X_OK) != 0) {
+    const std::string program = find_program(args[0]);
+    if (program.empty()) {
         print_error();
         return;
     }
