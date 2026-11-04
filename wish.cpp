@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <fcntl.h>
@@ -80,13 +81,14 @@ std::string find_program(const std::string& name) {
 }
 
 // Виконує вбудовану команду; повертає false, якщо це не вбудована команда.
-bool run_builtin(const std::vector<std::string>& args) {
+// exit лише ставить прапорець: спершу треба дочекатися запущених процесів.
+bool run_builtin(const std::vector<std::string>& args, bool& should_exit) {
     const std::string& name = args[0];
     if (name == "exit") {
         if (args.size() != 1) {
             print_error();
         } else {
-            std::exit(0);
+            should_exit = true;
         }
     } else if (name == "cd") {
         if (args.size() != 2 || chdir(args[1].c_str()) != 0) print_error();
@@ -98,19 +100,13 @@ bool run_builtin(const std::vector<std::string>& args) {
     return true;
 }
 
-void execute_line(const std::string& line) {
-    Command command;
-    if (!parse_command(line, command)) {
-        print_error();
-        return;
-    }
+// Запускає зовнішню програму; повертає pid дитини або -1, якщо не вдалося.
+pid_t start_program(const Command& command) {
     const std::vector<std::string>& args = command.args;
-    if (args.empty() || run_builtin(args)) return;
-
     const std::string program = find_program(args[0]);
     if (program.empty()) {
         print_error();
-        return;
+        return -1;
     }
 
     // Масив для execv готуємо до fork: він закінчується nullptr.
@@ -123,7 +119,7 @@ void execute_line(const std::string& line) {
     const pid_t pid = fork();
     if (pid < 0) {
         print_error();
-        return;
+        return -1;
     }
     if (pid == 0) {
         if (!command.output_file.empty() && !redirect_output(command.output_file)) {
@@ -136,8 +132,39 @@ void execute_line(const std::string& line) {
         _exit(1);
     }
 
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    return pid;
+}
+
+void execute_line(const std::string& line) {
+    // Спершу розбираємо весь рядок: за синтаксичної помилки не запускаємо нічого.
+    std::vector<Command> commands;
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t end = line.find('&', start);
+        Command command;
+        if (!parse_command(line.substr(start, end - start), command)) {
+            print_error();
+            return;
+        }
+        // Порожні частини (рядок "&" або "a &") просто пропускаємо.
+        if (!command.args.empty()) commands.push_back(std::move(command));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    std::vector<pid_t> children;
+    bool should_exit = false;
+    for (const Command& command : commands) {
+        if (run_builtin(command.args, should_exit)) continue;
+        const pid_t pid = start_program(command);
+        if (pid > 0) children.push_back(pid);
+    }
+
+    for (const pid_t pid : children) {
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    }
+    if (should_exit) std::exit(0);
 }
 
 }  // namespace
