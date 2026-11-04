@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -33,6 +34,37 @@ std::vector<std::string> tokenize(const std::string& text) {
         start = text.find_first_not_of(whitespace, end);
     }
     return tokens;
+}
+
+struct Command {
+    std::vector<std::string> args;
+    std::string output_file;  // порожній, якщо перенаправлення немає
+};
+
+// Розбирає одну команду; повертає false за синтаксичної помилки в перенаправленні.
+bool parse_command(const std::string& text, Command& command) {
+    const std::size_t redirect = text.find('>');
+    command.args = tokenize(text.substr(0, redirect));
+    if (redirect == std::string::npos) return true;
+
+    // Другий символ '>' потрапить у цей рядок і дасть помилку нижче.
+    const std::string target = text.substr(redirect + 1);
+    const std::vector<std::string> files = tokenize(target);
+    if (command.args.empty() || files.size() != 1 ||
+        target.find('>') != std::string::npos) {
+        return false;
+    }
+    command.output_file = files[0];
+    return true;
+}
+
+// У дочірньому процесі спрямовує stdout і stderr у файл, обрізаючи його.
+bool redirect_output(const std::string& path) {
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return false;
+    const bool ok = dup2(fd, STDOUT_FILENO) >= 0 && dup2(fd, STDERR_FILENO) >= 0;
+    close(fd);
+    return ok;
 }
 
 // Шлях пошуку програм; команда path повністю його перезаписує.
@@ -67,7 +99,12 @@ bool run_builtin(const std::vector<std::string>& args) {
 }
 
 void execute_line(const std::string& line) {
-    const std::vector<std::string> args = tokenize(line);
+    Command command;
+    if (!parse_command(line, command)) {
+        print_error();
+        return;
+    }
+    const std::vector<std::string>& args = command.args;
     if (args.empty() || run_builtin(args)) return;
 
     const std::string program = find_program(args[0]);
@@ -89,6 +126,10 @@ void execute_line(const std::string& line) {
         return;
     }
     if (pid == 0) {
+        if (!command.output_file.empty() && !redirect_output(command.output_file)) {
+            print_error();
+            _exit(1);
+        }
         execv(program.c_str(), exec_args.data());
         // execv повертає керування лише у разі помилки.
         print_error();
