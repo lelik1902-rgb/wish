@@ -1,9 +1,12 @@
 // wish - проста оболонка Unix (OSTEP, processes-shell).
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -19,8 +22,50 @@ void print_prompt() {
     if (write(STDOUT_FILENO, prompt, std::strlen(prompt)) < 0) {}
 }
 
+// Розбиває рядок на слова за пробільними символами.
+std::vector<std::string> tokenize(const std::string& text) {
+    static const char whitespace[] = " \t\r\n\v\f";
+    std::vector<std::string> tokens;
+    std::size_t start = text.find_first_not_of(whitespace);
+    while (start != std::string::npos) {
+        const std::size_t end = text.find_first_of(whitespace, start);
+        tokens.push_back(text.substr(start, end - start));
+        start = text.find_first_not_of(whitespace, end);
+    }
+    return tokens;
+}
+
 void execute_line(const std::string& line) {
-    (void)line;
+    const std::vector<std::string> args = tokenize(line);
+    if (args.empty()) return;
+
+    const std::string program = "/bin/" + args[0];
+    if (access(program.c_str(), X_OK) != 0) {
+        print_error();
+        return;
+    }
+
+    // Масив для execv готуємо до fork: він закінчується nullptr.
+    std::vector<char*> exec_args;
+    for (const std::string& arg : args) {
+        exec_args.push_back(const_cast<char*>(arg.c_str()));
+    }
+    exec_args.push_back(nullptr);
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        print_error();
+        return;
+    }
+    if (pid == 0) {
+        execv(program.c_str(), exec_args.data());
+        // execv повертає керування лише у разі помилки.
+        print_error();
+        _exit(1);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
 }
 
 }  // namespace
