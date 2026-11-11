@@ -36,7 +36,7 @@ std::vector<std::string> tokenize(const std::string& text) {
 
 struct Command {
     std::vector<std::string> args;
-    std::string output_file;  
+    std::string output_file;
 };
 
 bool parse_command(const std::string& text, Command& command) {
@@ -152,7 +152,7 @@ void execute_line(const std::string& line) {
     if (should_exit) std::exit(0);
 }
 
-}  
+}
 
 int main(int argc, char* argv[]) {
     if (argc > 2) {
